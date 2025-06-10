@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # Exit on error
@@ -22,8 +23,8 @@ else
 fi
 
 # Update the max_personas in the config file
-sed -i '' "s/max_personas: .*/max_personas: $MAX_PERSONAS  # Set to $MAX_PERSONAS for testing/" text_simulation/configs/openai_config.yaml
-
+#sed -i "s/max_personas: .*/max_personas: $MAX_PERSONAS  # Set to $MAX_PERSONAS for testing/" ./text_simulation/configs/openai_config.yaml
+sed -i "s/max_personas: .*/max_personas: $MAX_PERSONAS  # Set to $MAX_PERSONAS for testing/" ./text_simulation/configs/gemini_config.yaml
 # Run the pipeline steps
 echo "Step 1: Converting personas..."
 poetry run python text_simulation/batch_convert_personas.py \
@@ -38,6 +39,6 @@ echo "Step 3: Creating text simulation input..."
 poetry run python text_simulation/create_text_simulation_input.py 
 
 echo "Step 4: Running LLM simulation..."
-poetry run python text_simulation/run_LLM_simulations.py --config text_simulation/configs/openai_config.yaml --max_personas "$MAX_PERSONAS"
-
+#poetry run python text_simulation/run_LLM_simulations.py --config ./text_simulation/configs/openai_config.yaml --max_personas "$MAX_PERSONAS"
+poetry run python text_simulation/run_LLM_simulations.py --config ./text_simulation/configs/gemini_config.yaml --max_personas "$MAX_PERSONAS"
 echo "Pipeline completed!" 

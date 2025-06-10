@@ -11,6 +11,7 @@ text_simulation/text_questions/
 text_simulation/text_simulation_input/
 text_simulation/text_simulation_output/
 cache/
+gemini_test.py
 
 # C extensions
 *.so

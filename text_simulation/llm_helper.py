@@ -3,6 +3,8 @@ import time
 from typing import Dict, Optional, Union, Callable, List, Tuple
 import google.generativeai as genai
 from google.generativeai import types
+# ADD THE IMPORT HERE
+from google.api_core import exceptions as api_core_exceptions
 import openai
 from dotenv import load_dotenv
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, RetryCallState
@@ -69,12 +71,15 @@ async def _get_openai_response_direct(prompt: str, config: LLMConfig) -> Dict[st
         }
         return {"response_text": response.choices[0].message.content, "usage_details": usage_details}
 
+
 @retry(
     stop=stop_after_attempt(5), # Max 5 retries for the direct API call itself
     wait=wait_exponential(multiplier=1, min=4, max=60),
     retry=retry_if_exception_type((
         ConnectionError, 
-        TimeoutError 
+        TimeoutError,
+        api_core_exceptions.InternalServerError,
+        api_core_exceptions.ResourceExhausted
     )), 
     reraise=True
 )
@@ -82,13 +87,26 @@ async def _get_gemini_response_direct(prompt: str, config: LLMConfig) -> Dict[st
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise ValueError("GOOGLE_API_KEY environment variable not set")
-    g_client = genai.Client(api_key=api_key)
-    response = await asyncio.get_event_loop().run_in_executor(
-        None,
-        lambda: g_client.models.generate_content(
-            model=config.model_name, contents=[prompt],
-            generation_config=types.GenerationConfig(temperature=config.temperature),
-        )
+    
+    # Modern SDK Initialization
+    genai.configure(api_key=api_key)
+
+    # Setup generation config from your LLMConfig
+    generation_config = types.GenerationConfig(
+        temperature=config.temperature,
+        max_output_tokens=config.max_tokens
+    )
+
+    # Create the model instance, now including the system instruction
+    model = genai.GenerativeModel(
+        model_name=config.model_name,
+        system_instruction=config.system_instruction
+    )
+
+    # Make the async API call
+    response = await model.generate_content_async(
+        contents=[prompt],
+        generation_config=generation_config
     )
 
     # Check for blocked prompt or other non-fatal issues in the response directly
@@ -98,29 +116,32 @@ async def _get_gemini_response_direct(prompt: str, config: LLMConfig) -> Dict[st
             "response_text": "",
             "usage_details": {"prompt_token_count": response.usage_metadata.prompt_token_count if response.usage_metadata else 0}
         }
-    # Check if candidates are empty or finished for a non-retryable reason
-    if not response.candidates or (response.candidates[0].finish_reason not in [types.FinishReason.STOP, types.FinishReason.MAX_TOKENS]):
-        finish_reason_name = response.candidates[0].finish_reason.name if response.candidates else "UNKNOWN_NO_CANDIDATES"
-        # If it's due to safety or other non-retryable reasons, treat as an error to avoid infinite loops
-        if finish_reason_name in ["SAFETY", "RECITATION", "OTHER"]:
-             return {
-                "error": f"Generation stopped for a non-retryable reason: {finish_reason_name}",
-                "response_text": "",
-                "usage_details": {"prompt_token_count": response.usage_metadata.prompt_token_count if response.usage_metadata else 0}
-            }
+        
+    # ** THE FINAL, ROBUST FIX IS IMPLEMENTED HERE **
+    
+    # First, safely get the finish_reason's string name.
+    if not response.candidates:
+        finish_reason_name = "UNKNOWN_NO_CANDIDATES"
+    else:
+        # We get the string NAME of the finish reason, which avoids the import error.
+        finish_reason_name = response.candidates[0].finish_reason.name
+    
+    # Now, check if the generation finished for a reason that is NOT "STOP" or "MAX_TOKENS"
+    if finish_reason_name not in ["STOP", "MAX_TOKENS"]:
+        # If the reason is something else (like SAFETY), we treat it as an error for the retry logic.
+        return {
+            "error": f"Generation stopped for a non-retryable reason: {finish_reason_name}",
+            "response_text": "",
+            "usage_details": {"prompt_token_count": response.usage_metadata.prompt_token_count if response.usage_metadata else 0}
+        }
 
+    # If the code reaches here, the finish_reason was "STOP" or "MAX_TOKENS", so it's a success.
     usage_metadata = response.usage_metadata
     current_token_stats = {
-        "prompt_token_count": usage_metadata.prompt_token_count if usage_metadata else 0,
-        "candidates_token_count": usage_metadata.candidates_token_count if hasattr(usage_metadata, 'candidates_token_count') else 0,
-        "thoughts_token_count": usage_metadata.thoughts_token_count if hasattr(usage_metadata, 'thoughts_token_count') else 0,
-        "total_token_count": usage_metadata.total_token_count if hasattr(usage_metadata, 'total_token_count') else 0
+        "prompt_token_count": usage_metadata.prompt_token_count,
+        "candidates_token_count": usage_metadata.candidates_token_count,
+        "total_token_count": usage_metadata.total_token_count
     }
-    if hasattr(usage_metadata, 'prompt_tokens_details') and usage_metadata.prompt_tokens_details:
-        current_token_stats["prompt_tokens_details"] = [
-            {"modality": detail.modality.name if detail.modality else "UNKNOWN", "token_count": detail.token_count}
-            for detail in usage_metadata.prompt_tokens_details
-        ]
     return {"response_text": response.text, "usage_details": current_token_stats}
 
 
@@ -277,4 +298,4 @@ if __name__ == "__main__":
         # else:
         #     print("\nSkipping OpenAI test as OPENAI_API_KEY is not set.")
 
-    asyncio.run(main()) 
+    asyncio.run(main())
