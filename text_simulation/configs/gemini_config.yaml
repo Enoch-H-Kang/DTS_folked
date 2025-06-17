@@ -3,7 +3,7 @@ provider: "gemini"
 
 # Processing options
 force_regenerate: false
-max_personas: 2  # Set to 2 for testing
+max_personas: 5  # Set to 5 for testing
 num_workers: 30 # Number of concurrent requests
 
 # Retries for the entire sequence (LLM Call + Save + Verify)
